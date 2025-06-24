@@ -23,7 +23,8 @@ DOWNLOADS = ROOT / "downloads"
 DOWNLOADS.mkdir(exist_ok=True)
 
 # Update for EC2 if needed
-CHROMEDRIVER = "/Users/rishivijaywargiya/chromedriver-mac-arm64/chromedriver"
+CHROMEDRIVER_1 = "/Users/rishivijaywargiya/chromedriver-mac-arm64/chromedriver"
+CHROMEDRIVER = "/usr/local/bin/chromedriver"
 
 # ---------------------------------------------------------------------------
 # Selenium wrapper
