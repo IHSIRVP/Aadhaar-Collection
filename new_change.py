@@ -138,10 +138,16 @@ pool = CrawlerPool()
 # Flask API
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}, supports_credentials=True)
 
 def _session(lead: str, appid: str) -> AadhaarCrawler:
     return pool.get(lead, appid)
+
+@app.route("/", methods=["POST"])
+def init_session(lead, app):
+
+    return {"phase": "HELLO"}
+
 
 @app.route("/<lead>/<app>/init", methods=["POST"])
 def init_session(lead, app):

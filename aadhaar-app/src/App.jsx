@@ -10,7 +10,7 @@ export default function AadhaarTestApp() {
   const [status, setStatus] = useState("Idle");
   const [captchaUrl, setCaptchaUrl] = useState("");
 
-  const backend = "http://localhost:7001";
+  const backend = "http://127.0.0.1:7001";
   const path = (p) => `${backend}/${lead}/${applicant}${p}`;
 
   const post = async (url, body = {}) => {
