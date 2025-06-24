@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import os, time
+import os, time, base64, requests
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 from io import BytesIO
-import base64
-import requests
 
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
@@ -19,31 +17,31 @@ from selenium.webdriver.common.action_chains import ActionChains
 from PyPDF2 import PdfReader, PdfWriter
 
 # ---------------------------------------------------------------------------
-# Configuration --------------------------------------------------------------
+# Configuration
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).parent.resolve()
-DOWNLOADS = ROOT / "downloads"; DOWNLOADS.mkdir(exist_ok=True)
+DOWNLOADS = ROOT / "downloads"
+DOWNLOADS.mkdir(exist_ok=True)
 
-# ⬇️ Replace these placeholders with your actual values
-CHROMEDRIVER = "/Users/rishivijaywargiya/chromedriver-mac-arm64/chromedriver"
+# Update for EC2 if needed
+CHROMEDRIVER = "/usr/local/bin/chromedriver"
 
 # ---------------------------------------------------------------------------
-# Selenium wrapper -----------------------------------------------------------
+# Selenium wrapper
 # ---------------------------------------------------------------------------
 class AadhaarCrawler:
-    """Single headless‑Chrome session that walks through UIDAI site."""
-
-    def __init__(self):
+    def __init__(self, session_dir: Path):
         opts = Options()
-        # opts.add_argument("--headless=new")  # Visible browser (uncomment if needed)
+        # opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-gpu")
 
-        prefs = {"download.default_directory": str(DOWNLOADS)}
+        prefs = {"download.default_directory": str(session_dir)}
         opts.add_experimental_option("prefs", prefs)
 
         self.driver = webdriver.Chrome(service=Service(CHROMEDRIVER), options=opts)
         self.phase = "created"
+        self.session_dir = session_dir
         self.pdf_path: Optional[Path] = None
 
     def open_portal(self):
@@ -87,7 +85,7 @@ class AadhaarCrawler:
     def _await_pdf(self, timeout: int = 60) -> Optional[Path]:
         start = time.time()
         while time.time() - start < timeout:
-            for p in DOWNLOADS.iterdir():
+            for p in self.session_dir.iterdir():
                 if p.name.startswith("EAadhaar_") and p.suffix == ".pdf" and not p.name.endswith(".crdownload"):
                     return p
             time.sleep(1)
@@ -100,7 +98,8 @@ class AadhaarCrawler:
         if not reader.decrypt(password):
             return False
         writer = PdfWriter()
-        [writer.add_page(pg) for pg in reader.pages]
+        for page in reader.pages:
+            writer.add_page(page)
         with out_path.open("wb") as fh:
             writer.write(fh)
         return True
@@ -110,7 +109,7 @@ class AadhaarCrawler:
         self.phase = "closed"
 
 # ---------------------------------------------------------------------------
-# Session manager ------------------------------------------------------------
+# Session manager
 # ---------------------------------------------------------------------------
 SessionKey = Tuple[str, str]
 
@@ -121,7 +120,9 @@ class CrawlerPool:
     def get(self, lead: str, app: str) -> AadhaarCrawler:
         key = (lead, app)
         if key not in self._pool or self._pool[key].phase == "closed":
-            self._pool[key] = AadhaarCrawler()
+            session_dir = DOWNLOADS / f"{lead}_{app}"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            self._pool[key] = AadhaarCrawler(session_dir)
         return self._pool[key]
 
     def destroy(self, lead: str, app: str):
@@ -135,7 +136,7 @@ class CrawlerPool:
 pool = CrawlerPool()
 
 # ---------------------------------------------------------------------------
-# Flask API ------------------------------------------------------------------
+# Flask API
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 CORS(app)
@@ -145,10 +146,6 @@ def _session(lead: str, appid: str) -> AadhaarCrawler:
 
 @app.route("/<lead>/<app>/init", methods=["POST"])
 def init_session(lead, app):
-    # ⬅️ create subfolder for this session
-    session_dir = DOWNLOADS / f"{lead}_{app}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
     crawler = _session(lead, app)
     crawler.open_portal()
     return {"phase": crawler.phase}
@@ -157,8 +154,7 @@ def init_session(lead, app):
 def captcha_url(lead, app):
     crawler = _session(lead, app)
     try:
-        src = crawler.get_captcha_src()
-        return jsonify({"src": src})
+        return jsonify({"src": crawler.get_captcha_src()})
     except Exception as e:
         return {"error": str(e)}, 500
 
@@ -167,16 +163,13 @@ def captcha_image(lead, app):
     crawler = _session(lead, app)
     try:
         src = crawler.get_captcha_src()
-
         if src.startswith("data:image") or src.startswith("data:application/image"):
-            # Split header and data
             header, b64data = src.split(",", 1)
             image_data = base64.b64decode(b64data)
             response = make_response(image_data)
             response.headers.set("Content-Type", "image/png")
             return response
         else:
-            # fallback: direct image URL
             r = requests.get(src)
             return send_file(BytesIO(r.content), mimetype="image/png")
     except Exception as e:
@@ -184,14 +177,14 @@ def captcha_image(lead, app):
 
 @app.route("/<lead>/<app>/fill-aadhaar", methods=["POST"])
 def fill_aadhaar(lead, app):
-    num = request.json.get("aadhaar", "")
-    _session(lead, app).fill_aadhaar(num)
+    number = request.json.get("aadhaar", "")
+    _session(lead, app).fill_aadhaar(number)
     return {"phase": "awaiting_captcha"}
 
 @app.route("/<lead>/<app>/fill-captcha", methods=["POST"])
 def fill_captcha(lead, app):
-    cap = request.json.get("captcha", "")
-    _session(lead, app).fill_captcha(cap)
+    captcha = request.json.get("captcha", "")
+    _session(lead, app).fill_captcha(captcha)
     return {"phase": "awaiting_otp"}
 
 @app.route("/<lead>/<app>/fill-otp", methods=["POST"])
@@ -205,7 +198,7 @@ def fill_otp(lead, app):
 def unlock(lead, app):
     password = request.json.get("password", "")
     crawler = _session(lead, app)
-    dest = DOWNLOADS / f"unlocked_{lead}_{app}.pdf"
+    dest = crawler.session_dir / f"unlocked_{lead}_{app}.pdf"
     if crawler.unlock(password, dest):
         return send_file(dest, as_attachment=True)
     return {"error": "wrong password"}, 403
@@ -216,6 +209,7 @@ def status(lead, app):
     return {
         "phase": crawler.phase,
         "pdf": str(crawler.pdf_path) if crawler.pdf_path else None,
+        "download_dir": str(crawler.session_dir)
     }
 
 @app.route("/<lead>/<app>", methods=["DELETE"])
