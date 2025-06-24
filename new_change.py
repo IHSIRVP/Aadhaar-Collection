@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import os, time, base64, requests
 from pathlib import Path
 from typing import Dict, Tuple, Optional
@@ -24,7 +23,7 @@ DOWNLOADS = ROOT / "downloads"
 DOWNLOADS.mkdir(exist_ok=True)
 
 # Update for EC2 if needed
-CHROMEDRIVER = "/usr/local/bin/chromedriver"
+CHROMEDRIVER = "/Users/rishivijaywargiya/chromedriver-mac-arm64/chromedriver"
 
 # ---------------------------------------------------------------------------
 # Selenium wrapper
